@@ -30,20 +30,16 @@ type (
 )
 
 const (
-	progName          = "dyndns53"
-	ipFileNameDefault = "." + progName + "-ip"
+	progName   = "dyndns53"
+	ipFileName = "." + progName + "-ip"
 )
 
 var (
-	recSet     recordSet
-	logFn      string
-	awsProfile string
-	ipFileName string
-	names      arrayFlags
+	logFn string
 )
 
 func (i *arrayFlags) String() string {
-	return strings.Join([]string(*i), ",")
+	return strings.Join([]string(*i), ", ")
 }
 
 func (i *arrayFlags) Set(value string) error {
@@ -52,17 +48,19 @@ func (i *arrayFlags) Set(value string) error {
 }
 
 func main() {
-
 	log.SetPrefix(progName + ": ")
 	log.SetFlags(0)
+
+	var (
+		names  arrayFlags
+		recSet recordSet
+	)
 
 	flag.Var(&names, "name", "record set names (-name domain1 -name domain2 -name domain3 ...)")
 	flag.StringVar(&recSet.rsType, "type", "A", `record set type; "A" or "AAAA"`)
 	flag.Int64Var(&recSet.ttl, "ttl", 300, "TTL (time to live) in seconds")
 	flag.StringVar(&recSet.hostedZoneID, "zone", "", "hosted zone id")
 	flag.StringVar(&logFn, "log", "", "file name to log to (default is stdout)")
-	flag.StringVar(&awsProfile, "profile", progName, "AWS profile")
-	flag.StringVar(&ipFileName, "ip-file", ipFileNameDefault, "IP file storage")
 
 	if len(os.Args) == 1 {
 		flag.Usage()
@@ -72,8 +70,8 @@ func main() {
 
 	recSet.names = make([]string, len(names))
 
-	for i, v := range names {
-		recSet.names[i] = strings.TrimSuffix(v, ".") + "." // append . if missing
+	for i, name := range names {
+		recSet.names[i] = strings.TrimSuffix(name, ".") + "." // append . if missing
 	}
 
 	if err := recSet.validate(); err != nil {
@@ -102,7 +100,7 @@ func main() {
 	}
 
 	recSet.value = ip
-	_, err = recSet.upsert(awsProfile)
+	_, err = recSet.upsert()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -142,13 +140,13 @@ func updateLastIPAddress(ip string) error {
 	return nil
 }
 
-func (rs *recordSet) upsert(profileName string) (*route53.ChangeResourceRecordSetsOutput, error) {
+func (rs *recordSet) upsert() (*route53.ChangeResourceRecordSetsOutput, error) {
 	usr, err := user.Current()
 	if err != nil {
 		return nil, fmt.Errorf("(*recordSet).upsert: %v", err)
 	}
 	credentialsPath := path.Join(usr.HomeDir, ".aws", "credentials")
-	credentials := credentials.NewSharedCredentials(credentialsPath, profileName)
+	credentials := credentials.NewSharedCredentials(credentialsPath, progName)
 
 	sess, err := session.NewSession()
 	if err != nil {
@@ -156,12 +154,12 @@ func (rs *recordSet) upsert(profileName string) (*route53.ChangeResourceRecordSe
 	}
 
 	svc := route53.New(sess, &aws.Config{Credentials: credentials})
-	changes := make([]*route53.Change, len(recSet.names))
-	for i, v := range recSet.names {
+	changes := make([]*route53.Change, len(rs.names))
+	for i, name := range rs.names {
 		changes[i] = &route53.Change{
 			Action: aws.String("UPSERT"),
 			ResourceRecordSet: &route53.ResourceRecordSet{
-				Name: aws.String(v),
+				Name: aws.String(name),
 				Type: aws.String(rs.rsType),
 				TTL:  aws.Int64(rs.ttl),
 				ResourceRecords: []*route53.ResourceRecord{
@@ -186,12 +184,9 @@ func (rs *recordSet) upsert(profileName string) (*route53.ChangeResourceRecordSe
 }
 
 func (rs *recordSet) validate() error {
-	for _, v := range rs.names {
-		if v == "" {
-			return fmt.Errorf("missing record set name")
-		}
-		if !strings.HasSuffix(v, ".") {
-			return fmt.Errorf(`record set name must end with a "."`)
+	for i, name := range rs.names {
+		if name == "" {
+			return fmt.Errorf("missing record set name at index %d", i)
 		}
 	}
 	if rs.rsType == "" {
